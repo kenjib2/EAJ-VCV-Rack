@@ -2,80 +2,95 @@
 #include "LoopBuffer.hpp"
 
 
+// THINGS THAT POP:
+// SENSITIVITY TRIGGER (FADE -- is that just a crossfade against 0?)
+// LOOP LATCH (CROSS)
+// REVERSE READ AND WRITE CROSSING (CROSS)
+// GLITCH TIME CHANGES (CROSS)
+
+
 GlitchBuffer::GlitchBuffer(int bufferSize)
 	: AudioBuffer(bufferSize)
-	, highWaterMarkPointer(0)
+	, highWaterMarkIndex(0)
 {
 }
 
 
 bool GlitchBuffer::atLoopStart() {
-	return (readPointer == 0);
+	return (readIndex == 0);
 }
 
 
 float GlitchBuffer::loopPosition(int loopSize) {
-	return float(readPointer) / loopSize;
+	return float(readIndex) / loopSize;
 }
 
 
-void GlitchBuffer::latch(int numLoops) {
-	latchLoopCounter = numLoops;
+int GlitchBuffer::samplesRemaining(int loopSize) {
+	return std::min(highWaterMarkIndex, loopSize - 1) - readIndex;
 }
 
 
-void GlitchBuffer::restartLoop() {
-	if (latchLoopCounter > 0) {
-		latched = true;
-		latchLoopCounter--;
-	}
-	else {
-		latched = false;
-	}
+int GlitchBuffer::samplesRead() {
+	return readIndex + 1;
+}
+
+
+float GlitchBuffer::getFadeCoefficient() {
+	return 0.f;
+}
+
+
+float GlitchBuffer::readPeekVoltage() {
+//	int peekIndex = readIndex;
+
+	return 0.f;
 }
 
 
 float GlitchBuffer::readNextVoltage(int sampleRate, int loopSize, bool reverse, bool forceDucking) {
 	loopSize = std::min(loopSize, bufferSize); // Avoid buffer overruns
-	readPointer++;
-	if (readPointer >= loopSize) {
+	readIndex++;
+	if (readIndex >= loopSize) {
 		restartLoop();
 	}
-	readPointer = readPointer % loopSize;
+	readIndex = readIndex % loopSize;
 	float returnVoltage = 0.f;
-	int reverseReadPointer = loopSize - 1 - readPointer;
+	int reverseReadIndex = loopSize - 1 - readIndex;
 
 	if (reverse) {
-		returnVoltage = delayBuffer[reverseReadPointer];
+		returnVoltage = delayBuffer[reverseReadIndex];
 	}
 	else {
-		returnVoltage = delayBuffer[readPointer];
+		returnVoltage = delayBuffer[readIndex];
 	}
 
 	// Past the end of where we recorded last time just return silence
-	if (readPointer > highWaterMarkPointer) {
+	if (readIndex > highWaterMarkIndex) {
 		returnVoltage = 0.f;
 	}
 
-	return returnVoltage;
+	return removePops(returnVoltage);
 }
 
 
 void GlitchBuffer::writeNextVoltage(int sampleRate, int loopSize, float voltage) {
-	writePointer = readPointer;
+	writeIndex = readIndex;
 
 	if (!latched) {
-		delayBuffer[writePointer] = voltage;
+		delayBuffer[writeIndex] = voltage;
 
 		// Updates when the loop size grows, truncates when it shrinks
-		if (writePointer >= loopSize - 1) {
-			highWaterMarkPointer = writePointer;
+		if (writeIndex >= loopSize - 1) {
+			highWaterMarkIndex = writeIndex;
 		}
 	}
 }
 
 
-StretchBuffer::StretchBuffer(int bufferSize) : AudioBuffer(bufferSize) {
+StretchBuffer::StretchBuffer(int bufferSize)
+	: AudioBuffer(bufferSize)
+{
 }
 
 
@@ -89,19 +104,23 @@ float StretchBuffer::loopPosition(int loopSize) {
 }
 
 
-void StretchBuffer::latch(int numLoops) {
-	latchLoopCounter = numLoops;
+int StretchBuffer::samplesRemaining(int loopSize) {
+	return 0;
 }
 
 
-void StretchBuffer::restartLoop() {
-	if (latchLoopCounter > 0) {
-		latched = true;
-		latchLoopCounter--;
-	}
-	else {
-		latched = false;
-	}
+int StretchBuffer::samplesRead() {
+	return 0;
+}
+
+
+float StretchBuffer::getFadeCoefficient() {
+	return 0.f;
+}
+
+
+float StretchBuffer::readPeekVoltage() {
+	return 0.f;
 }
 
 
@@ -113,46 +132,47 @@ float StretchBuffer::readNextVoltage(int sampleRate, int loopSize, bool reverse,
 	if (int(bufferPosition + 0.5f) >= bufferSize) {
 		bufferPosition -= bufferSize;
 		loopStart = true;
+		restartLoop();
 	}
 	else {
 		loopStart = false;
 	}
 
-	readPointer = int(bufferPosition + 0.5f); // 0.5f is for rounding
-	readPointer = std::min(readPointer, bufferSize - 1); // Avoid buffer overrun
+	readIndex = int(bufferPosition + 0.5f); // 0.5f is for rounding
+	readIndex = std::min(readIndex, bufferSize - 1); // Avoid buffer overrun
 
-	int reverseReadPointer = bufferSize - 1 - readPointer;
+	int reverseReadIndex = bufferSize - 1 - readIndex;
 
 	if (reverse) {
-		returnVoltage = delayBuffer[reverseReadPointer];
+		returnVoltage = delayBuffer[reverseReadIndex];
 	}
 	else {
-		returnVoltage = delayBuffer[readPointer];
+		returnVoltage = delayBuffer[readIndex];
 	}
 
-	return returnVoltage;
+	return removePops(returnVoltage);
 }
 
 
 void StretchBuffer::writeNextVoltage(int sampleRate, int loopSize, float voltage) {
-	if ((writePointer < 0) || (writePointer >= bufferSize)) { // Avoid buffer overrun
-		writePointer = bufferSize - 1;
+	if ((writeIndex < 0) || (writeIndex >= bufferSize)) { // Avoid buffer overrun
+		writeIndex = bufferSize - 1;
 	}
 
 	if (!latched) {
 		int numWrites = 0;
-		if (readPointer >= writePointer) {
-			numWrites = readPointer - writePointer;
+		if (readIndex >= writeIndex) {
+			numWrites = readIndex - writeIndex;
 		}
 		else {
-			numWrites += bufferSize - 1 - writePointer + readPointer;
+			numWrites += bufferSize - 1 - writeIndex + readIndex;
 		}
 
 		for (int i = 0; i <= numWrites; i++) {
-			delayBuffer[(writePointer + i) % (bufferSize - 1)] = voltage;
+			delayBuffer[(writeIndex + i) % (bufferSize - 1)] = voltage;
 		}
 
-		writePointer = readPointer;
+		writeIndex = readIndex;
 	}
 }
 

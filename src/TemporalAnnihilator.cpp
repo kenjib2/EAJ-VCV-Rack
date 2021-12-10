@@ -4,8 +4,7 @@
 #include "../freeverb/revmodel.hpp"
 
 const int UI_REFRESH_RATE_FACTOR = 50;
-const float MIN_TIME = 0.020f;
-const int FADE_SAMPLES = 60;
+const float MIN_TIME_PARAM = 0.020f;
 const int PEAK_RELEASE_SAMPLES = 10000;
 const int MAX_BUFFER_SECONDS = 2;
 const int MAX_SAMPLE_RATE = 768000;
@@ -327,7 +326,7 @@ struct TemporalAnnihilator : Module {
 	private:
 		bool triggered;
 		bool writeEnabled;
-		int loopLatchCount;
+//		int loopLatchCount;
 		int timeLatchCount;
 		AudioBuffer* loopBuffer;
 		AudioBuffer* glitchBuffer;
@@ -388,7 +387,7 @@ struct TemporalAnnihilator : Module {
 			configParam(SENSITIVITY_PARAM, 0.f, 5.f, 5.f, "");
 			configParam(LOOP_LATCH_PARAM, 0.f, 1.f, 0.f, "");
 
-			configParam(TIME_PARAM, MIN_TIME, 1.f, 0.5f, "");
+			configParam(TIME_PARAM, MIN_TIME_PARAM, 1.f, 0.5f, "");
 			configParam(FEEDBACK_PARAM, 0.f, 1.f, 0.f, "");
 			configParam(TIME_DRIFT_PARAM, 0.f, 1.f, 0.f, "");
 			configParam(TIME_LATCH_PARAM, 0.f, 1.f, 0.f, "");
@@ -406,7 +405,7 @@ struct TemporalAnnihilator : Module {
 			triggered = false;
 			writeEnabled = true;
 			timeOffset = 0;
-			loopLatchCount = 0;
+//			loopLatchCount = 0;
 			timeLatchCount = 0;
 			refreshCounter = 0;
 			peakReleaseCount = 0;
@@ -445,7 +444,7 @@ struct TemporalAnnihilator : Module {
 				lights[TRIGGER_LIGHT].setBrightness(0.f);
 			}
 
-			if (loopLatchCount > 0) {
+			if (loopBuffer->isLatched()) {
 				lights[LLATCH_LIGHT].setBrightness(1.f);
 			}
 			else {
@@ -542,17 +541,17 @@ struct TemporalAnnihilator : Module {
 				}
 
 				// Managing latches this cycle
-				if (loopLatchCount == 0) {
-					forceDucking = false;
+				if (!loopBuffer->isLatched()) {
+//					forceDucking = false;
 					float rand = random::uniform();
 					if (rand > (1.f - paramLoopLatchLog)) {
-						loopLatchCount = 13 - 8 * rand;
+						loopBuffer->latch(13 - 8 * rand);
 					}
 				}
-				if (loopLatchCount > 0) {
-					forceDucking = true;
-					loopLatchCount--;
-				}
+//				if (loopLatchCount > 0) {
+//					forceDucking = true;
+//					loopLatchCount--;
+//				}
 
 				if (timeLatchCount == 0) {
 					float rand = random::uniform();
@@ -566,10 +565,10 @@ struct TemporalAnnihilator : Module {
 
 				// Setting the offsets for drift
 				// Don't drift when we are loop latched or time latched
-				if (loopLatchCount == 0 && timeLatchCount == 0) {
+				if (loopBuffer->isLatched() && timeLatchCount == 0) {
 					float offsetWeighting = random::uniform() * paramTimeDriftLog - paramTimeDriftLog / 2;
 					if (offsetWeighting < 0) {
-						timeOffset = int((paramTimeInSamples - MIN_TIME * args.sampleRate) * offsetWeighting);
+						timeOffset = int((paramTimeInSamples - MIN_TIME_PARAM * args.sampleRate) * offsetWeighting);
 					}
 					else {
 						timeOffset = int((MAX_BUFFER_SIZE - paramTimeInSamples) * offsetWeighting);
@@ -590,7 +589,7 @@ struct TemporalAnnihilator : Module {
 			}
 
 			// --------------------------- Calculate Output Voltage ---------------------------
-			int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
+			int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
 			float glitchVoltage = glitchBuffer->readNextVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, forceDucking);
 			float stretchVoltage = stretchBuffer->readNextVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, forceDucking);
 			float bufferVoltage = 0.f;
@@ -604,10 +603,10 @@ struct TemporalAnnihilator : Module {
 			outputs[OUTPUT_OUTPUT].setVoltage(outputVoltage);
 
 			// --------------------------- Write out to Buffer ---------------------------
-			if (loopLatchCount > 0) {
+//			if (loopLatchCount > 0) {
 				// If loop has latched, then repeat the buffer exactly (do nothing)
-			}
-			else if (writeEnabled) {
+//			}
+			if (writeEnabled) {
 				// Digital Delay Behavior
 				float calculatedInputVoltage = inputVoltage;
 				if (fadeInCount < FADE_SAMPLES) {
