@@ -66,11 +66,11 @@ void GlitchBuffer::writeNextVoltage(int sampleRate, int loopSize, float voltage)
 
 	if (!latched) {
 		delayBuffer[writePointer] = voltage;
-	}
 
-	// Updates when the loop size grows, truncates when it shrinks
-	if (writePointer >= loopSize - 1) {
-		highWaterMarkPointer = writePointer;
+		// Updates when the loop size grows, truncates when it shrinks
+		if (writePointer >= loopSize - 1) {
+			highWaterMarkPointer = writePointer;
+		}
 	}
 }
 
@@ -139,18 +139,20 @@ void StretchBuffer::writeNextVoltage(int sampleRate, int loopSize, float voltage
 		writePointer = bufferSize - 1;
 	}
 
-	int numWrites = 0;
-	if (readPointer >= writePointer) {
-		numWrites = readPointer - writePointer;
-	}
-	else {
-		numWrites += bufferSize - 1 - writePointer + readPointer;
-	}
+	if (!latched) {
+		int numWrites = 0;
+		if (readPointer >= writePointer) {
+			numWrites = readPointer - writePointer;
+		}
+		else {
+			numWrites += bufferSize - 1 - writePointer + readPointer;
+		}
 
-	for (int i = 0; i <= numWrites; i++) {
-		delayBuffer[(writePointer + i) % (bufferSize - 1)] = voltage;
-	}
+		for (int i = 0; i <= numWrites; i++) {
+			delayBuffer[(writePointer + i) % (bufferSize - 1)] = voltage;
+		}
 
-	writePointer = readPointer;
+		writePointer = readPointer;
+	}
 }
 
