@@ -13,264 +13,7 @@ const int MAX_BUFFER_SIZE = MAX_SAMPLE_RATE * MAX_BUFFER_SECONDS;
 
 // To figure out:
 // Latch on just a dry signal where sensitivity starts the loop latch rather than the delay? Maybe that's a different effect?
-// Add ducking when sensitivity triggers -- need to change sensitivity to some kind of peak analysis or compressor like algorithm
-// Pop when latching or drifting in reverse both buffers
-
-/*class AudioBuffer {
-	public:
-		virtual bool atLoopStart() = 0;
-		virtual float loopPosition(int loopSize) = 0;
-		virtual float readNextVoltage(int sampleRate, int loopSize, bool reverse, bool forceDucking) = 0;
-		virtual void writeNextVoltage(int sampleRate, int loopSize, float voltage) = 0;
-
-		virtual ~AudioBuffer() = default;
-};*/
-
-/*class StretchBuffer : public AudioBuffer {
-	private:
-		float* delayBuffer;
-		float bufferPosition;
-		int writePointer;
-		int readPointer;
-		bool loopStart;
-		bool fadingIn;
-
-	public:
-		StretchBuffer() {
-			bufferPosition = 0.f;
-			readPointer = 0;
-			loopStart = true;
-			delayBuffer = new float[MAX_BUFFER_SIZE](); // parens initialize the buffer to all zeroes
-		}
-
-		~StretchBuffer() {
-			delete[] delayBuffer;
-		}
-
-		bool atLoopStart() override {
-			return loopStart;
-		}
-
-		float loopPosition(int loopSize) override {
-			return bufferPosition / MAX_BUFFER_SIZE;
-		}
-
-		float readNextVoltage(int sampleRate, int loopSize, bool reverse, bool forceDucking) override {
-			float returnVoltage = 0.f;
-			float scaleFactor = (float)MAX_BUFFER_SIZE / (float)loopSize;
-			bufferPosition += scaleFactor;
-			int virtualReadPointer = (int)(bufferPosition / scaleFactor + 0.5f);
-
-			if (int(bufferPosition + 0.5f) >= MAX_BUFFER_SIZE) {
-				bufferPosition -= MAX_BUFFER_SIZE;
-				loopStart = true;
-			}
-			else {
-				loopStart = false;
-			}
-
-			readPointer = int(bufferPosition + 0.5f); // 0.5f is for rounding
-			readPointer = std::min(readPointer, MAX_BUFFER_SIZE - 1); // Avoid buffer overrun
-
-			int reverseReadPointer = MAX_BUFFER_SIZE - 1 - readPointer;
-			int virtualWritePointer = (int)(writePointer / scaleFactor + 0.5f);
-			int reverseVirtualReadPointer = (int)(reverseReadPointer / scaleFactor + 0.5f);
-			int relativeReverseVirtualReadPointer = reverseVirtualReadPointer; // For crossfading reverse delays
-			if (relativeReverseVirtualReadPointer <= FADE_SAMPLES && virtualWritePointer >= loopSize - FADE_SAMPLES) {
-				relativeReverseVirtualReadPointer += loopSize;
-//				DEBUG("Relative read %d / %d vs write %d for loop size %d", reverseVirtualReadPointer, relativeReverseVirtualReadPointer, virtualWritePointer, loopSize);
-			}
-			int relativeVirtualWritePointer = virtualWritePointer; // For crossfading reverse delays
-			if (relativeVirtualWritePointer <= FADE_SAMPLES && reverseVirtualReadPointer >= loopSize - FADE_SAMPLES) {
-				relativeVirtualWritePointer += loopSize;
-//				DEBUG("Relative write %d / %d vs read %d for loop size %d", virtualWritePointer, relativeVirtualWritePointer, reverseVirtualReadPointer, loopSize);
-			}
-
-			if (reverse) {
-				returnVoltage = delayBuffer[reverseReadPointer];
-			}
-			else {
-				returnVoltage = delayBuffer[readPointer];
-			}
-
-			// Ducking for loop latch
-			if (forceDucking && virtualReadPointer > loopSize - FADE_SAMPLES) {
-				returnVoltage = returnVoltage * (loopSize - virtualReadPointer) / (float)FADE_SAMPLES;
-DEBUG("FADEOUT %d", virtualReadPointer);
-				fadingIn = true;
-			}
-			else if (fadingIn && virtualReadPointer < FADE_SAMPLES) {
-				returnVoltage = returnVoltage * virtualReadPointer / (float)FADE_SAMPLES;
-DEBUG("FADEIN %d", virtualReadPointer);
-			} // If we are in reverse mode and the read pointer is approaching the write pointer, crossfade to reading ahead by FADE_SAMPLES * 2 samples.
-			else if (reverse && relativeReverseVirtualReadPointer - virtualWritePointer < FADE_SAMPLES * 2 && relativeReverseVirtualReadPointer - virtualWritePointer >= 0) {
-				int virtualPeekAheadPointer = relativeReverseVirtualReadPointer - FADE_SAMPLES * 2;
-				if (virtualPeekAheadPointer < 0) {
-					virtualPeekAheadPointer += loopSize;
-				}
-				else if (virtualPeekAheadPointer > loopSize - 1) {
-					virtualPeekAheadPointer -= loopSize;
-				}
-				int peekAheadPointer = int(virtualPeekAheadPointer * scaleFactor + 0.5f);
-				float peekAheadVoltage = delayBuffer[peekAheadPointer];
-				float fadeCoefficient = .0000001f; // The case when reverseReadPointer == writePointer
-				if (relativeReverseVirtualReadPointer != virtualWritePointer) {
-					fadeCoefficient = (relativeReverseVirtualReadPointer - virtualWritePointer) / ((float)FADE_SAMPLES * 2);
-				}
-				returnVoltage = returnVoltage * fadeCoefficient + peekAheadVoltage * (1.f - fadeCoefficient);
-//DEBUG("Crossfade %f start %d / %d / %d fade %f voltages %f / %f and %f / %f", returnVoltage, virtualPeekAheadPointer, relativeReverseVirtualReadPointer, virtualWritePointer, fadeCoefficient, returnVoltage, returnVoltage * fadeCoefficient, peekAheadVoltage, peekAheadVoltage * (1.f - fadeCoefficient));
-			} // If we are in reverse mode we need to fade back to the original pointer.
-			else if (reverse && relativeVirtualWritePointer - reverseVirtualReadPointer < FADE_SAMPLES * 2 && relativeVirtualWritePointer - reverseVirtualReadPointer > 0) {
-				int virtualPeekAheadPointer = reverseVirtualReadPointer - FADE_SAMPLES * 2;
-				if (virtualPeekAheadPointer < 0) {
-					virtualPeekAheadPointer += loopSize;
-				}
-				int peekAheadPointer = int(virtualPeekAheadPointer * scaleFactor + 0.5f);
-				float peekAheadVoltage = delayBuffer[peekAheadPointer];
-				float fadeCoefficient = (relativeVirtualWritePointer - reverseVirtualReadPointer) / ((float)FADE_SAMPLES * 2); // We don't need to account for divide by zero in this case because writePointer - reverseReadPointer > 0.
-				returnVoltage = returnVoltage * fadeCoefficient + peekAheadVoltage * (1.f - fadeCoefficient);
-//DEBUG("Crossfade %f stop %d / %d / %d fade %f voltages %f / %f and %f / %f", returnVoltage, virtualPeekAheadPointer, reverseVirtualReadPointer, relativeVirtualWritePointer, fadeCoefficient, returnVoltage, returnVoltage * fadeCoefficient, peekAheadVoltage, peekAheadVoltage * (1.f - fadeCoefficient));
-			}
-			else {
-				fadingIn = false;
-			}
-
-			return returnVoltage;
-		}
-
-		void writeNextVoltage(int sampleRate, int loopSize, float voltage) override {
-			if ((writePointer < 0) || (writePointer >= MAX_BUFFER_SIZE)) { // Avoid buffer overrun
-				writePointer = MAX_BUFFER_SIZE - 1;
-			}
-
-			int numWrites = 0;
-			if (readPointer >= writePointer) {
-				numWrites = readPointer - writePointer;
-			} else {
-				numWrites += MAX_BUFFER_SIZE - 1 - writePointer + readPointer;
-			}
-
-			for (int i = 0; i <= numWrites; i++) {
-				delayBuffer[(writePointer + i) % (MAX_BUFFER_SIZE - 1)] = voltage;
-			}
-
-			writePointer = readPointer;
-		}
-
-		void latch(int numLoops) override {
-		}
-};*/
-
-/*class GlitchBufferOld : public AudioBuffer {
-	private:
-		float* delayBuffer;
-		int writePointer;
-		int readPointer;
-		int highWaterMarkPointer; // This is the highest buffer position that was written to in the last pass through the loop.
-		bool fadingIn;
-
-	public:
-		GlitchBufferOld() {
-			readPointer = 0;
-			highWaterMarkPointer = 0;
-			delayBuffer = new float[MAX_BUFFER_SIZE](); // parens initialize the buffer to all zeroes
-		}
-
-		~GlitchBufferOld() {
-			delete[] delayBuffer;
-		}
-
-		bool atLoopStart() override {
-			return (readPointer == 0);
-		}
-
-		float loopPosition(int loopSize) override {
-			return float(readPointer) / loopSize;
-		}
-
-		float readNextVoltage(int sampleRate, int loopSize, bool reverse, bool forceDucking) override {
-			loopSize = std::min(loopSize, MAX_BUFFER_SIZE); // Avoid buffer overruns
-			readPointer++;
-			readPointer = readPointer % loopSize;
-			float returnVoltage = 0.f;
-			int reverseReadPointer = loopSize - 1 - readPointer;
-			int relativeReverseReadPointer = reverseReadPointer; // For crossfading reverse delays
-			if (relativeReverseReadPointer <= FADE_SAMPLES && writePointer >= loopSize - FADE_SAMPLES) {
-				relativeReverseReadPointer += loopSize;
-			}
-			int relativeWritePointer = writePointer; // For crossfading reverse delays
-			if (relativeWritePointer <= FADE_SAMPLES && reverseReadPointer >= loopSize - FADE_SAMPLES) {
-				relativeWritePointer += loopSize;
-			}
-
-			if (reverse) {
-				returnVoltage = delayBuffer[reverseReadPointer];
-			}
-			else {
-				returnVoltage = delayBuffer[readPointer];
-			}
-
-			// Past the end of where we recorded last time just return silence
-			if (readPointer > highWaterMarkPointer) {
-				returnVoltage = 0.f;
-			} // If we will need to add silence, then fade out the end of the loop so that it doesn't pop
-			else if ((forceDucking || loopSize > highWaterMarkPointer + 1) && readPointer > highWaterMarkPointer - FADE_SAMPLES) {
-				returnVoltage = returnVoltage * (highWaterMarkPointer - readPointer) / (float)FADE_SAMPLES;
-				fadingIn = true;
-			} // If we are shortening the loop or loop latching, then fade out the end of the loop so that it doesn't pop
-			else if (( forceDucking || loopSize < highWaterMarkPointer + 1) && readPointer > loopSize - FADE_SAMPLES) {
-				returnVoltage = returnVoltage * (loopSize - readPointer) / (float)FADE_SAMPLES;
-				fadingIn = true;
-			}
-			else if (fadingIn && readPointer < FADE_SAMPLES) {
-				returnVoltage = returnVoltage * readPointer / (float)FADE_SAMPLES;
-			} // If we are in reverse mode and the read pointer is approaching the write pointer, crossfade to reading ahead by FADE_SAMPLES * 2 samples.
-			else if (reverse && relativeReverseReadPointer - writePointer < FADE_SAMPLES * 2 && relativeReverseReadPointer - writePointer >= 0) {
-				int peekAheadPointer = relativeReverseReadPointer - FADE_SAMPLES * 2;
-				if (peekAheadPointer < 0) {
-					peekAheadPointer += loopSize;
-				}
-				else if (peekAheadPointer > loopSize - 1) {
-					peekAheadPointer -= loopSize;
-				}
-				float peekAheadVoltage = delayBuffer[peekAheadPointer];
-				float fadeCoefficient = .0000001f; // The case when reverseReadPointer == writePointer
-				if (relativeReverseReadPointer != writePointer) {
-					fadeCoefficient = (relativeReverseReadPointer - writePointer) / ((float)FADE_SAMPLES * 2);
-				}
-				returnVoltage = returnVoltage * fadeCoefficient + peekAheadVoltage * (1.f - fadeCoefficient);
-			} // If we are in reverse mode we need to fade back to the original pointer.
-			else if (reverse && relativeWritePointer - reverseReadPointer < FADE_SAMPLES * 2 && relativeWritePointer - reverseReadPointer > 0) {
-				int peekAheadPointer = reverseReadPointer - FADE_SAMPLES * 2;
-				if (peekAheadPointer < 0) {
-					peekAheadPointer += loopSize;
-				}
-				float peekAheadVoltage = delayBuffer[peekAheadPointer];
-				float fadeCoefficient = (relativeWritePointer - reverseReadPointer) / ((float)FADE_SAMPLES * 2); // We don't need to account for divide by zero in this case because writePointer - reverseReadPointer > 0.
-				returnVoltage = returnVoltage * fadeCoefficient + peekAheadVoltage * (1.f - fadeCoefficient);
-			}
-			else {
-				fadingIn = false;
-			}
-
-			return returnVoltage;
-		}
-
-		void writeNextVoltage(int sampleRate, int loopSize, float voltage) override {
-			writePointer = readPointer;
-
-			delayBuffer[writePointer] = voltage;
-
-			if (writePointer >= loopSize - 1) {
-				highWaterMarkPointer = writePointer;
-			}
-//DEBUG("WRITE PTR %d / %d / %d: %f", writePointer, highWaterMarkPointer, loopSize, voltage);
-		}
-
-		void latch(int numLoops) override {
-		}
-};*/
-
+// Change sensitivity to some kind of peak analysis or compressor like algorithm
 class BitCrusher {
 	private:
 		float lastDownsample;
@@ -326,11 +69,10 @@ struct TemporalAnnihilator : Module {
 	private:
 		bool triggered;
 		bool writeEnabled;
-//		int loopLatchCount;
 		int timeLatchCount;
 		AudioBuffer* loopBuffer;
 		AudioBuffer* glitchBuffer;
-		AudioBuffer* stretchBuffer;
+//		AudioBuffer* stretchBuffer;
 		int timeOffset;
 		int refreshCounter;
 		BitCrusher* bitCrusher;
@@ -339,8 +81,6 @@ struct TemporalAnnihilator : Module {
 		Saturator* saturator;
 		bool forceDucking = false;
 		int peakReleaseCount = 0;
-		int fadeInCount = 0;
-		int fadeOutCount = 0;
 
 	public:
 		enum ParamId {
@@ -392,25 +132,23 @@ struct TemporalAnnihilator : Module {
 			configParam(TIME_DRIFT_PARAM, 0.f, 1.f, 0.f, "");
 			configParam(TIME_LATCH_PARAM, 0.f, 1.f, 0.f, "");
 
-			configParam(SMOOTH_PARAM, 0.011f, 1.f, 0.f, "");
+			configParam(SMOOTH_PARAM, 0.f, 0.989f, 0.f, "");
 			configParam(SMEAR_PARAM, 0.f, 1.f, 0.f, "");
 			configParam(DRIVE_PARAM, 0.f, 1.f, 0.f, "");
 			configParam(CRUSH_PARAM, 0.f, 1.f, 0.f, "");
 
 			configInput(INPUT_INPUT, "");
 			configOutput(OUTPUT_OUTPUT, "");
-			stretchBuffer = new StretchBuffer(MAX_BUFFER_SIZE);
+//			stretchBuffer = new StretchBuffer(MAX_BUFFER_SIZE);
 			glitchBuffer = new GlitchBuffer(MAX_BUFFER_SIZE);
+//			loopBuffer = stretchBuffer;
 			loopBuffer = glitchBuffer;
 			triggered = false;
 			writeEnabled = true;
 			timeOffset = 0;
-//			loopLatchCount = 0;
 			timeLatchCount = 0;
 			refreshCounter = 0;
 			peakReleaseCount = 0;
-			fadeInCount = 0;
-			fadeOutCount = 0;
 
 			bitCrusher = new BitCrusher();
 			filter = new CjFilter();
@@ -426,7 +164,7 @@ struct TemporalAnnihilator : Module {
 		}
 
 		~TemporalAnnihilator() {
-			delete stretchBuffer;
+//			delete stretchBuffer;
 			delete glitchBuffer;
 			delete bitCrusher;
 			delete filter;
@@ -522,36 +260,30 @@ struct TemporalAnnihilator : Module {
 
 			// Selecting the buffer
 			if (paramBuffer < 0.000001f) {
-				loopBuffer = stretchBuffer;
+//				loopBuffer = stretchBuffer;
 			}
 			else {
 				loopBuffer = glitchBuffer;
 			}
+			int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
 
 			// --------------------------- Actions Starting Each Loop ---------------------------
 			if (loopBuffer->atLoopStart()) {
 				// Reset sensitivity triggering
 				if (peakReleaseCount > PEAK_RELEASE_SAMPLES) {
 					triggered = false;
-					fadeInCount = 0;
 				}
 				if (triggered == false) {
 					writeEnabled = false;
-					fadeOutCount = FADE_SAMPLES;
 				}
 
 				// Managing latches this cycle
 				if (!loopBuffer->isLatched()) {
-//					forceDucking = false;
 					float rand = random::uniform();
 					if (rand > (1.f - paramLoopLatchLog)) {
 						loopBuffer->latch(13 - 8 * rand);
 					}
 				}
-//				if (loopLatchCount > 0) {
-//					forceDucking = true;
-//					loopLatchCount--;
-//				}
 
 				if (timeLatchCount == 0) {
 					float rand = random::uniform();
@@ -580,6 +312,9 @@ struct TemporalAnnihilator : Module {
 			// --------------------------- Check for loop sensitivity trigger ---------------------------
 			float inputVoltage = inputs[INPUT_INPUT].getVoltage();
 			if (abs(inputVoltage) > 5.f - paramSensitivity) {
+				if (triggered == false) {
+					loopBuffer->startFade();
+				}
 				peakReleaseCount = 0;
 				triggered = true;
 				writeEnabled = true;  // Sensitivity will turn off latch when the threshold is exceeded
@@ -588,47 +323,39 @@ struct TemporalAnnihilator : Module {
 				peakReleaseCount++;
 			}
 
+			if (triggered && peakReleaseCount > PEAK_RELEASE_SAMPLES && loopBuffer->samplesRemaining(loopSize) == FADE_SAMPLES + 1) {
+				// If we are near the end of the loop and we aren't triggered for the next loop, fade it out
+				loopBuffer->fadeLoopEnd();
+			}
+
 			// --------------------------- Calculate Output Voltage ---------------------------
-			int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
-			float glitchVoltage = glitchBuffer->readNextVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, forceDucking);
-			float stretchVoltage = stretchBuffer->readNextVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, forceDucking);
-			float bufferVoltage = 0.f;
-			if (paramBuffer < 0.000001f) {
-				bufferVoltage = stretchVoltage;
-			}
-			else {
-				bufferVoltage = glitchVoltage;
-			}
-			float outputVoltage = inputVoltage * paramDry + bufferVoltage * paramWet;
+			float outputVoltage = loopBuffer->calculateReadVoltage(args.sampleRate, loopSize, inputVoltage, paramDirection < 0.000001f, paramDry, paramWet);
 			outputs[OUTPUT_OUTPUT].setVoltage(outputVoltage);
+//if (glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage); }
+//if (loopSize - glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage); }
 
 			// --------------------------- Write out to Buffer ---------------------------
-//			if (loopLatchCount > 0) {
-				// If loop has latched, then repeat the buffer exactly (do nothing)
-//			}
 			if (writeEnabled) {
-				// Digital Delay Behavior
+				// Add new input and buffer decay
 				float calculatedInputVoltage = inputVoltage;
-				if (fadeInCount < FADE_SAMPLES) {
-					calculatedInputVoltage = calculatedInputVoltage * fadeInCount / FADE_SAMPLES;
-					fadeInCount++;
-					DEBUG("FADE IN: %f", calculatedInputVoltage);
-				}
-				float newBufferVoltage = applyLoopEffects(calculatedInputVoltage + paramFeedback * bufferVoltage);
-				glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newBufferVoltage);
-				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newBufferVoltage);
+				float newGlitchBufferVoltage = applyLoopEffects(glitchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, calculatedInputVoltage));
+//				float newStretchBufferVoltage = applyLoopEffects(stretchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, calculatedInputVoltage));
+				glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newGlitchBufferVoltage);
+//				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newStretchBufferVoltage);
+//DEBUG("write enabled Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), newGlitchBufferVoltage);
 			}
 			else {
-				float newBufferVoltage = paramFeedback * bufferVoltage;
-				if (fadeOutCount > 0) {
-					newBufferVoltage += applyLoopEffects(inputVoltage * fadeOutCount / FADE_SAMPLES);
-					fadeOutCount--;
-					DEBUG("FADE OUT: %f", newBufferVoltage);
-				}
+				float newGlitchBufferVoltage = glitchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, 0.f); // paramFeedback * bufferVoltage;
+//				float newStretchBufferVoltage = stretchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, 0.f); // paramFeedback * bufferVoltage;
 				// Buffer decay with no new input
-				glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newBufferVoltage);
-				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newBufferVoltage);
+				glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newGlitchBufferVoltage);
+//				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newStretchBufferVoltage);
+//DEBUG("write disabled Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), newBufferVoltage);
 			}
+
+			// --------------------------- Advance the Buffer ---------------------------
+			glitchBuffer->next(loopSize);
+//			stretchBuffer->next(loopSize);
 
 			// --------------------------- UI Refresh ---------------------------
 			// Don't refresh the UI with every cycle. It is a waste of CPU
