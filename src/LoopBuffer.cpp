@@ -1,5 +1,6 @@
 #include "plugin.hpp"
 #include "LoopBuffer.hpp"
+#define DEBUG_READ
 
 
 // THINGS THAT POP:
@@ -60,6 +61,7 @@ float GlitchBuffer::doRead(int sampleRate, int loopSize, bool reverse) {
 	int reverseReadIndex = getReverseIndex(loopSize);
 	bool needFadeIn = false;
 
+	DEBUG("TEST: %d", highWaterMarkIndex - readIndex);
 	if (reverse) {
 		returnVoltage = loopBuffer[reverseReadIndex];
 	}

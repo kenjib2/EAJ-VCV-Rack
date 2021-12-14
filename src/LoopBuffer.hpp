@@ -253,12 +253,13 @@ public:
 
 		float bufferVoltage;
 		if (reverse) {
-			bufferVoltage = removePops(loopBuffer[getReverseIndex(loopSize)], sampleRate, loopSize);
+			bufferVoltage = doRead(sampleRate, loopSize, true);
 		}
 		else {
-			bufferVoltage = removePops(loopBuffer[readIndex], sampleRate, loopSize);
+			bufferVoltage = doRead(sampleRate, loopSize, false);
 		}
 
+		bufferVoltage = removePops(bufferVoltage, sampleRate, loopSize);
 		returnVoltage = returnVoltage * dryVolume + bufferVoltage * wetVolume;
 
 		return returnVoltage;
