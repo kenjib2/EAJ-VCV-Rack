@@ -279,7 +279,6 @@ struct TemporalAnnihilator : Module {
 				if (sensitivityShuttingDown) {
 					sensitivityShuttingDown = false;
 					sensitivityTriggered = false;
-DEBUG("Turning off sensitivity");
 				}
 
 				// Managing latches this cycle -- don't latch if we aren't triggered
@@ -302,7 +301,7 @@ DEBUG("Turning off sensitivity");
 
 				// Setting the offsets for drift
 				// Don't drift when we are loop latched or time latched
-				if (loopBuffer->isLatched() && timeLatchCount == 0) {
+				if (!loopBuffer->isLatched() && timeLatchCount == 0) {
 					float offsetWeighting = random::uniform() * paramTimeDriftLog - paramTimeDriftLog / 2;
 					if (offsetWeighting < 0) {
 						timeOffset = int((paramTimeInSamples - MIN_TIME_PARAM * args.sampleRate) * offsetWeighting);
@@ -330,21 +329,16 @@ DEBUG("Turning off sensitivity");
 			// --------------------------- Calculate Output Voltage ---------------------------
 			float outputVoltage = loopBuffer->calculateReadVoltage(args.sampleRate, loopSize, inputVoltage, paramDirection < 0.000001f, paramDry, paramWet);
 			outputs[OUTPUT_OUTPUT].setVoltage(outputVoltage);
-if (glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f sensitivitytriggered: %d", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage, sensitivityTriggered); }
-if (loopSize - glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f sensitivitytriggered: %d", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage, sensitivityTriggered); }
 
 			// --------------------------- Write out to Buffer ---------------------------
 		if (!sensitivityTriggered) {
 			inputVoltage = 0.f;
 		}
 		// Add new input and buffer decay
-//DEBUG("write enabled1 Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), inputVoltage);
 		float glitchInputVoltage = glitchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, inputVoltage);
 //		float stretchInputVoltage = stretchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, inputVoltage);
-//DEBUG("write enabled2 Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), inputVoltage);
 		float newGlitchBufferVoltage = applyLoopEffects(glitchInputVoltage);
 		//float newStretchBufferVoltage = applyLoopEffects(stretchInputVoltage);
-//DEBUG("write enabled3 Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), newGlitchBufferVoltage);
 		glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newGlitchBufferVoltage);
 //				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newStretchBufferVoltage);
 

@@ -3,7 +3,7 @@
 
 
 // THINGS THAT POP:
-// NEED UPDATE TO USE BOOLEAN - SENSITIVITY TRIGGER (FADE)
+// FIXED - SENSITIVITY TRIGGER (FADE)
 // FIXED - LOOP LATCH (CROSS)
 // REVERSE READ AND WRITE CROSSING (CROSS)
 // GLITCH TIME CHANGES (CROSS)
@@ -58,12 +58,31 @@ float GlitchBuffer::readPeekVoltage(int loopSize) {
 float GlitchBuffer::doRead(int sampleRate, int loopSize, bool reverse) {
 	float returnVoltage = 0.f;
 	int reverseReadIndex = getReverseIndex(loopSize);
+	bool needFadeIn = false;
 
 	if (reverse) {
 		returnVoltage = loopBuffer[reverseReadIndex];
 	}
 	else {
 		returnVoltage = loopBuffer[readIndex];
+
+		if (loopSize > highWaterMarkIndex + 1 && highWaterMarkIndex - readIndex >= 0 && highWaterMarkIndex - readIndex < FADE_SAMPLES) {
+			returnVoltage = crossFade(returnVoltage, (float)(highWaterMarkIndex - readIndex) / FADE_SAMPLES, 0.f);
+			needFadeIn = true;
+			#ifdef DEBUG_READ
+				DEBUG("ptr %d / %d Fading out: %f", readIndex, loopSize, returnVoltage);
+			#endif
+		}
+		else if (needFadeIn && readIndex <= FADE_SAMPLES) {
+			if (readIndex == FADE_SAMPLES) {
+				needFadeIn = false;
+			}
+
+			returnVoltage = crossFade(returnVoltage, (float)readIndex / FADE_SAMPLES, 0.f);
+			#ifdef DEBUG_READ
+				DEBUG("ptr %d / %d Fading in: %f", readIndex, loopSize, returnVoltage);
+			#endif
+		}
 	}
 
 	// Past the end of where we recorded last time just return silence
@@ -71,6 +90,10 @@ float GlitchBuffer::doRead(int sampleRate, int loopSize, bool reverse) {
 		returnVoltage = 0.f;
 	}
 
+	#ifdef DEBUG_READ
+		//if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f samples read %d fade coefficient %f", readIndex, loopSize, returnVoltage, samplesRead(loopSize), getFadeCoefficient(loopSize, -1)); }
+		//if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f samples read %d fade coefficient %f", readIndex, loopSize, returnVoltage, samplesRead(loopSize), getFadeCoefficient(loopSize, 1)); }
+	#endif
 	return returnVoltage;
 }
 
@@ -84,8 +107,10 @@ void GlitchBuffer::doWrite(int sampleRate, int loopSize, float voltage) {
 	if (writeIndex >= loopSize - 1) {
 		highWaterMarkIndex = writeIndex;
 	}
-//if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
-//if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
+	#ifdef DEBUG_WRITE
+		if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
+		if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
+	#endif
 }
 
 
@@ -144,8 +169,8 @@ float StretchBuffer::readPeekVoltage(int loopSize) {
 		peekIndex += bufferSize;
 	}
 
-	return 0.f;
-//	return loopBuffer[peekIndex];
+//	return 0.f;
+	return loopBuffer[peekIndex];
 }
 
 
@@ -179,7 +204,6 @@ void StretchBuffer::doWrite(int sampleRate, int loopSize, float voltage) {
 	static int lastWriteIndex = 0;
 
 	if ((writeIndex < 0) || (writeIndex >= bufferSize)) { // Avoid buffer overrun
-DEBUG("ERROR IN DOWRITE");
 		writeIndex = 0;
 	}
 
@@ -223,7 +247,6 @@ void StretchBuffer::next(int loopSize) {
 
 	readIndex = int(bufferPosition + 0.5f); // 0.5f is for rounding
 	readIndex = std::min(readIndex, bufferSize - 1); // Avoid buffer overrun
-//DEBUG("Next called: bufferPosition %f / readIndex %d / bufferSize %d read %d remaining %d loopSize %d", bufferPosition, readIndex, bufferSize, samplesRead(loopSize), samplesRemaining(loopSize), loopSize);
 }
 
 

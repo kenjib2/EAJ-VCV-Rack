@@ -54,6 +54,7 @@ protected:
 		static bool latchPlusOne = false;
 		float returnVoltage = voltageIn;
 
+		// These are all for removing pops during latches
 		if (isLatched() && nearEnd(loopSize)) {
 			// Cross fade to the peek at the end of every latched loop
 			needCrossFadePeek = true;
@@ -72,9 +73,6 @@ protected:
 			needWriteFadeIn = true;
 			latchPlusOne = false;
 		}
-//		if (needInputFadeOut) {
-//			needRewriteFadeOut = true;
-//		}
 
 		if (needCrossFadePeek && samplesRemaining(loopSize) <= FADE_SAMPLES) {
 			// Smear the end of each loop while latched.
@@ -83,7 +81,9 @@ protected:
 			}
 			float peekVoltage = readPeekVoltage(loopSize);
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, 1), peekVoltage);
-DEBUG("Cross fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, peekVoltage, returnVoltage, getFadeCoefficient(loopSize, 1));
+			#ifdef DEBUG_POPS
+				DEBUG("Cross fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, peekVoltage, returnVoltage, getFadeCoefficient(loopSize, 1));
+			#endif
 		}
 
 		else if (needCrossFadeReturn && samplesRead(loopSize) <= FADE_SAMPLES) {
@@ -93,7 +93,9 @@ DEBUG("Cross fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, lo
 			}
 			float peekVoltage = readPeekVoltage(loopSize);
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, -1), peekVoltage);
-DEBUG("Cross fade back %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, peekVoltage, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#ifdef DEBUG_POPS
+				DEBUG("Cross fade back %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, peekVoltage, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#endif
 		}
 
 		if (needReadFadeIn && samplesRead(loopSize) <= FADE_SAMPLES) {
@@ -102,7 +104,9 @@ DEBUG("Cross fade back %d / %d: %f + %f = %f using coefficient %f", readIndex, l
 				needReadFadeIn = false;
 			}
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, -1), 0.f);
-DEBUG("Read fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#ifdef DEBUG_POPS
+				DEBUG("Read fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#endif
 		}
 
 		if (needReadFadeOut && samplesRemaining(loopSize) <= FADE_SAMPLES) {
@@ -111,7 +115,9 @@ DEBUG("Read fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loop
 				needReadFadeOut = false;
 			}
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, 1), 0.f);
-DEBUG("Read fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, 1));
+			#ifdef DEBUG_POPS
+				DEBUG("Read fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, 1));
+			#endif
 		}
 
 		if (needRewriteFadeIn && samplesRead(loopSize) <= FADE_SAMPLES) {
@@ -119,12 +125,13 @@ DEBUG("Read fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loo
 			// reading through the loop. It does not alter the current iteration. This is a destructive operation.
 			if (samplesRead(loopSize) == FADE_SAMPLES) {
 				needRewriteFadeIn = false;
-//				needReadFadeIn = true;
 			}
 			// Fade in the buffer head if this is the last latch
 			float writeVoltage = loopBuffer[readIndex];
 			writeVoltage = crossFade(writeVoltage, getFadeCoefficient(loopSize, -1), 0.f);
-DEBUG("Rewrite fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, loopBuffer[readIndex], 0.f, writeVoltage, getFadeCoefficient(loopSize, -1));
+			#ifdef DEBUG_POPS
+				DEBUG("Rewrite fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, loopBuffer[readIndex], 0.f, writeVoltage, getFadeCoefficient(loopSize, -1));
+			#endif
 			doWrite(sampleRate, loopSize, writeVoltage);
 		}
 
@@ -136,7 +143,9 @@ DEBUG("Rewrite fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, l
 			}
 			float writeVoltage = loopBuffer[readIndex];
 			writeVoltage = crossFade(writeVoltage, getFadeCoefficient(loopSize, 1), 0.f);
-DEBUG("Rewrite fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, loopBuffer[readIndex], 0.f, writeVoltage, getFadeCoefficient(loopSize, 1));
+			#ifdef DEBUG_POPS
+				DEBUG("Rewrite fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, loopBuffer[readIndex], 0.f, writeVoltage, getFadeCoefficient(loopSize, 1));
+			#endif
 			doWrite(sampleRate, loopSize, writeVoltage);
 		}
 
@@ -151,11 +160,15 @@ DEBUG("Rewrite fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, 
 		}
 		else {
 			if (latched == true) {
-				DEBUG("TURNING OFF LATCH");
+				#ifdef DEBUG_POPS
+					DEBUG("TURNING OFF LATCH");
+				#endif
 			}
 			latched = false;
 		}
-DEBUG("Starting new loop. Latch %d count %d.", isLatched(), latchLoopCounter);
+		#ifdef DEBUG_POPS
+			DEBUG("Starting new loop. Latch %d count %d.", isLatched(), latchLoopCounter);
+		#endif
 	}
 
 
@@ -244,7 +257,6 @@ public:
 		}
 		else {
 			bufferVoltage = removePops(loopBuffer[readIndex], sampleRate, loopSize);
-//DEBUG("Index %d bufferVoltage %f.", readIndex, bufferVoltage);
 		}
 
 		returnVoltage = returnVoltage * dryVolume + bufferVoltage * wetVolume;
@@ -271,12 +283,16 @@ public:
 		if (fadeInCounter > 0) {
 			returnVoltage = crossFade(returnVoltage, (float)(FADE_SAMPLES - fadeInCounter) / FADE_SAMPLES, 0.f);
 			fadeInCounter--;
-DEBUG("Input fade in %d / %d: %f + %f = %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage);
+			#ifdef DEBUG_POPS
+				DEBUG("Input fade in %d / %d: %f + %f = %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage);
+			#endif
 		}
 		if (fadeOutCounter > 0) {
 			returnVoltage = crossFade(returnVoltage, (float)fadeOutCounter / FADE_SAMPLES, 0.f);
 			fadeOutCounter--;
-DEBUG("Input fade out %d / %d counter %d: %f + %f = %f", readIndex, loopSize, fadeOutCounter, voltageIn, 0.f, returnVoltage);
+			#ifdef DEBUG_POPS
+				DEBUG("Input fade out %d / %d counter %d: %f + %f = %f", readIndex, loopSize, fadeOutCounter, voltageIn, 0.f, returnVoltage);
+			#endif
 		}
 
 		float bufferVoltage = loopBuffer[readIndex];
@@ -287,14 +303,18 @@ DEBUG("Input fade out %d / %d counter %d: %f + %f = %f", readIndex, loopSize, fa
 				needWriteFadeIn = false;
 			}
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, -1), 0.f);
-DEBUG("Write fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#ifdef DEBUG_POPS
+				DEBUG("Write fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#endif
 		}
 		else if (needWriteFadeOut) {
 			if (samplesRemaining(loopSize) == 0) {
 				needWriteFadeOut = false;
 			}
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, 1), 0.f);
-DEBUG("Write fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#ifdef DEBUG_POPS
+				DEBUG("Write fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+			#endif
 		}
 
 		return returnVoltage;
