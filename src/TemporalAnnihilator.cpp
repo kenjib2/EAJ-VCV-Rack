@@ -67,8 +67,7 @@ class Saturator {
 
 struct TemporalAnnihilator : Module {
 	private:
-		bool triggered;
-		bool writeEnabled;
+		bool sensitivityTriggered;
 		int timeLatchCount;
 		AudioBuffer* loopBuffer;
 		AudioBuffer* glitchBuffer;
@@ -143,8 +142,7 @@ struct TemporalAnnihilator : Module {
 			glitchBuffer = new GlitchBuffer(MAX_BUFFER_SIZE);
 //			loopBuffer = stretchBuffer;
 			loopBuffer = glitchBuffer;
-			triggered = false;
-			writeEnabled = true;
+			sensitivityTriggered = false;
 			timeOffset = 0;
 			timeLatchCount = 0;
 			refreshCounter = 0;
@@ -175,7 +173,7 @@ struct TemporalAnnihilator : Module {
 		void setLights(int loopSize, float timeDrift) {
 			lights[LOOP_LIGHT].setBrightness(1.f - 1.f * loopBuffer->loopPosition(loopSize));
 
-			if (triggered) {
+			if (sensitivityTriggered) {
 				lights[TRIGGER_LIGHT].setBrightness(1.f);
 			}
 			else {
@@ -258,6 +256,8 @@ struct TemporalAnnihilator : Module {
 			float paramTimeLatch = params[TIME_LATCH_PARAM].getValue();
 			float paramTimeLatchLog = paramTimeLatch * paramTimeLatch; // We want a logorithmic response rate
 
+			static bool sensitivityShuttingDown = false;
+
 			// Selecting the buffer
 			if (paramBuffer < 0.000001f) {
 //				loopBuffer = stretchBuffer;
@@ -268,13 +268,18 @@ struct TemporalAnnihilator : Module {
 			int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
 
 			// --------------------------- Actions Starting Each Loop ---------------------------
-			if (loopBuffer->atLoopStart()) {
+			if (loopBuffer->samplesRemaining(loopSize) == FADE_SAMPLES && peakReleaseCount > PEAK_RELEASE_SAMPLES && sensitivityTriggered) {
+				// Check if sensitivity isn't triggered for the next loop FADE_SAMPLES before we start the loop
+				// so we can fade out the 
+				loopBuffer->startInputFadeOut();
+				sensitivityShuttingDown = true;
+			}
+			else if (loopBuffer->atLoopStart()) {
 				// Reset sensitivity triggering
-				if (peakReleaseCount > PEAK_RELEASE_SAMPLES) {
-					triggered = false;
-				}
-				if (triggered == false) {
-					writeEnabled = false;
+				if (sensitivityShuttingDown) {
+					sensitivityShuttingDown = false;
+					sensitivityTriggered = false;
+DEBUG("Turning off sensitivity");
 				}
 
 				// Managing latches this cycle
@@ -312,46 +317,47 @@ struct TemporalAnnihilator : Module {
 			// --------------------------- Check for loop sensitivity trigger ---------------------------
 			float inputVoltage = inputs[INPUT_INPUT].getVoltage();
 			if (abs(inputVoltage) > 5.f - paramSensitivity) {
-				if (triggered == false) {
-					loopBuffer->startFade();
+				if (sensitivityTriggered == false) {
+					loopBuffer->startInputFadeIn();
 				}
 				peakReleaseCount = 0;
-				triggered = true;
-				writeEnabled = true;  // Sensitivity will turn off latch when the threshold is exceeded
+				sensitivityTriggered = true;  // Sensitivity will turn off latch when the threshold is exceeded
 			}
 			else {
 				peakReleaseCount++;
 			}
 
-			if (triggered && peakReleaseCount > PEAK_RELEASE_SAMPLES && loopBuffer->samplesRemaining(loopSize) == FADE_SAMPLES + 1) {
-				// If we are near the end of the loop and we aren't triggered for the next loop, fade it out
-				loopBuffer->fadeLoopEnd();
-			}
-
 			// --------------------------- Calculate Output Voltage ---------------------------
 			float outputVoltage = loopBuffer->calculateReadVoltage(args.sampleRate, loopSize, inputVoltage, paramDirection < 0.000001f, paramDry, paramWet);
 			outputs[OUTPUT_OUTPUT].setVoltage(outputVoltage);
-//if (glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage); }
-//if (loopSize - glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage); }
+if (glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f sensitivitytriggered: %d", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage, sensitivityTriggered); }
+if (loopSize - glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d loopSize %d read voltage: %f sensitivitytriggered: %d", glitchBuffer->samplesRead(loopSize), loopSize, outputVoltage, sensitivityTriggered); }
 
 			// --------------------------- Write out to Buffer ---------------------------
-			if (writeEnabled) {
-				// Add new input and buffer decay
-				float calculatedInputVoltage = inputVoltage;
-				float newGlitchBufferVoltage = applyLoopEffects(glitchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, calculatedInputVoltage));
+		if (!sensitivityTriggered) {
+			inputVoltage = 0.f;
+		}
+		// Add new input and buffer decay
+DEBUG("write enabled1 Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), inputVoltage);
+inputVoltage = glitchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, inputVoltage);
+DEBUG("write enabled2 Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), inputVoltage);
+		float newGlitchBufferVoltage = applyLoopEffects(inputVoltage);
 //				float newStretchBufferVoltage = applyLoopEffects(stretchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, calculatedInputVoltage));
-				glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newGlitchBufferVoltage);
+DEBUG("write enabled3 Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), newGlitchBufferVoltage);
+		glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newGlitchBufferVoltage);
 //				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newStretchBufferVoltage);
-//DEBUG("write enabled Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), newGlitchBufferVoltage);
-			}
-			else {
+//			}
+/*			else {
+				// Only decay the buffer. No new input.
 				float newGlitchBufferVoltage = glitchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, 0.f); // paramFeedback * bufferVoltage;
 //				float newStretchBufferVoltage = stretchBuffer->calculateWriteVoltage(args.sampleRate, loopSize, paramDirection < 0.000001f, paramFeedback, 0.f); // paramFeedback * bufferVoltage;
 				// Buffer decay with no new input
 				glitchBuffer->writeNextVoltage(args.sampleRate, loopSize, newGlitchBufferVoltage);
 //				stretchBuffer->writeNextVoltage(args.sampleRate, loopSize, newStretchBufferVoltage);
 //DEBUG("write disabled Ptr %d voltage %f", loopBuffer->samplesRead(loopSize), newBufferVoltage);
-			}
+if (glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples written %d loopSize %d write voltage: %f sensitivitytriggered: %d", glitchBuffer->samplesRead(loopSize), loopSize, newGlitchBufferVoltage, sensitivityTriggered); }
+if (loopSize - glitchBuffer->samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples written %d loopSize %d write voltage: %f sensitivitytriggered: %d", glitchBuffer->samplesRead(loopSize), loopSize, newGlitchBufferVoltage, sensitivityTriggered); }
+			}*/
 
 			// --------------------------- Advance the Buffer ---------------------------
 			glitchBuffer->next(loopSize);

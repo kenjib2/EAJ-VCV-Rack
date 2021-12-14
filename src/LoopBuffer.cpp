@@ -84,6 +84,8 @@ void GlitchBuffer::doWrite(int sampleRate, int loopSize, float voltage) {
 	if (writeIndex >= loopSize - 1) {
 		highWaterMarkIndex = writeIndex;
 	}
+if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
+if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
 }
 
 

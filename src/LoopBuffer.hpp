@@ -1,3 +1,6 @@
+#pragma once
+
+
 const int FADE_SAMPLES = 60;
 
 
@@ -16,6 +19,8 @@ protected:
 	bool needWriteFadeOut;
 	bool needRewriteFadeIn;
 	bool needRewriteFadeOut;
+	bool needInputFadeIn;
+	bool needInputFadeOut;
 
 	virtual float readPeekVoltage(int loopSize) = 0;
 	virtual int getReverseIndex(int loopSize) = 0;
@@ -40,6 +45,7 @@ protected:
 	}
 
 
+	// Behavior for latches:
 	// 1st latch round -- stops writing to loop buffer -- peek cross fades out
 	// 2nd+ latch rounds -- no writing to loop buffer -- peek cross fades in, peek cross fades out
 	// last latch round -- no writing to loop buffer -- peek cross fades in, peek cross fades out, rewrite fade out to buffer
@@ -66,6 +72,9 @@ protected:
 			needWriteFadeIn = true;
 			latchPlusOne = false;
 		}
+//		if (needInputFadeOut) {
+//			needRewriteFadeOut = true;
+//		}
 
 		if (needCrossFadePeek && samplesRemaining(loopSize) <= FADE_SAMPLES) {
 			// Smear the end of each loop while latched.
@@ -88,6 +97,7 @@ DEBUG("Cross fade back %d / %d: %f + %f = %f using coefficient %f", readIndex, l
 		}
 
 		if (needReadFadeIn && samplesRead(loopSize) <= FADE_SAMPLES) {
+			// Fade in the buffer audio at the beginning of the loop
 			if (samplesRead(loopSize) == FADE_SAMPLES) {
 				needReadFadeIn = false;
 			}
@@ -96,6 +106,7 @@ DEBUG("Read fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loop
 		}
 
 		if (needReadFadeOut && samplesRemaining(loopSize) <= FADE_SAMPLES) {
+			// Fade out the buffer audio at the end of the loop
 			if (samplesRemaining(loopSize) == 0) {
 				needReadFadeOut = false;
 			}
@@ -104,9 +115,11 @@ DEBUG("Read fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loo
 		}
 
 		if (needRewriteFadeIn && samplesRead(loopSize) <= FADE_SAMPLES) {
+			// Rewrite the beginning of the buffer to fade in. This will not take effect on the current read data until the next time
+			// reading through the loop. It does not alter the current iteration. This is a destructive operation.
 			if (samplesRead(loopSize) == FADE_SAMPLES) {
 				needRewriteFadeIn = false;
-				needReadFadeIn = true;
+//				needReadFadeIn = true;
 			}
 			// Fade in the buffer head if this is the last latch
 			float writeVoltage = loopBuffer[readIndex];
@@ -115,8 +128,9 @@ DEBUG("Rewrite fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, l
 			doWrite(sampleRate, loopSize, writeVoltage);
 		}
 
-		//DEBUG("needWriteFadeOut %d samplesRemaining %d / %d", needWriteFadeOut, samplesRemaining(loopSize), FADE_SAMPLES);
 		if (needRewriteFadeOut && samplesRemaining(loopSize) <= FADE_SAMPLES) {
+			// Rewrite the end of the buffer to fade out. This will not take effect on the current read data until the next time
+			// reading through the loop. It does not alter the current iteration. This is a destructive operation.
 			if (samplesRemaining(loopSize) == 0) {
 				needRewriteFadeOut = false;
 			}
@@ -147,7 +161,6 @@ DEBUG("Starting new loop. Latch %d count %d.", isLatched(), latchLoopCounter);
 
 public:
 	int bufferSize;
-	int fadeInCounter;
 
 	virtual bool atLoopStart() = 0;
 	virtual float loopPosition(int loopSize) = 0; // Relative position in loop from 0.f to 1.f
@@ -169,8 +182,9 @@ public:
 		, needWriteFadeOut(false)
 		, needRewriteFadeIn(false)
 		, needRewriteFadeOut(false)
+		, needInputFadeIn(false)
+		, needInputFadeOut(false)
 		, bufferSize(bufferSize)
-		, fadeInCounter(0)
 	{
 		loopBuffer = new float[bufferSize](); // parens initialize the buffer to all zeroes
 	}
@@ -210,31 +224,19 @@ public:
 	}
 
 
-	void startFade() {
-		fadeInCounter = FADE_SAMPLES;
+	void startInputFadeIn() {
+		needInputFadeIn = true;
 	}
 
 
-	void fadeLoopEnd() {
-		needRewriteFadeOut = true;
+	void startInputFadeOut() {
+		needInputFadeOut = true;
 	}
 
 
 	// Volumes are between 0.f and 1.f
 	float calculateReadVoltage(int sampleRate, int loopSize, float voltageIn, bool reverse, float dryVolume, float wetVolume) {
 		float returnVoltage = voltageIn;
-
-//THIS IS FADING IN THE VOLTAGE IN INSTEAD OF THE BUFFER VOLTAGE!
-//DEBUG("TEST Index %d / %d Need %d", samplesRead(loopSize), loopSize, needReadFadeIn);
-/*		if (needReadFadeIn && samplesRead(loopSize) < FADE_SAMPLES) {
-			// New input comes at latch + 2 so we need to fade it in to avoid popping
-			if (samplesRead(loopSize) == FADE_SAMPLES - 1) {
-				needReadFadeIn = false;
-			}
-
-			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, -1), 0.f);
-DEBUG("Fading in new input. Index %d voltage %f.", readIndex, returnVoltage);
-		}*/
 
 		float bufferVoltage;
 		if (reverse) {
@@ -253,14 +255,32 @@ DEBUG("Fading in new input. Index %d voltage %f.", readIndex, returnVoltage);
 
 	// Feedback is between 0.0f and 1.0f
 	float calculateWriteVoltage(int sampleRate, int loopSize, bool direction, float feedback, float voltageIn) {
+		static int fadeInCounter = 0;
+		static int fadeOutCounter = 0;
 		float returnVoltage = voltageIn;
 
-//DEBUG("Ptr %d voltage %f", readIndex, returnVoltage);
-		if (fadeInCounter > 0) {
-			returnVoltage = crossFade(returnVoltage, (1.f - (float)fadeInCounter / FADE_SAMPLES), 0.f);
-//DEBUG("Fading in ptr %d count %d, %f + %f = voltage %f", readIndex, fadeInCounter, voltageIn, 0.f, returnVoltage);
-			fadeInCounter--;
+		if (needInputFadeIn) {
+			fadeInCounter = FADE_SAMPLES;
+			needInputFadeIn = false;
 		}
+		if (needInputFadeOut && samplesRemaining(loopSize) == FADE_SAMPLES - 1) {
+			fadeOutCounter = FADE_SAMPLES;
+			needInputFadeOut = false;
+		}
+
+		if (fadeInCounter > 0) {
+			returnVoltage = crossFade(returnVoltage, (float)(FADE_SAMPLES - fadeInCounter) / FADE_SAMPLES, 0.f);
+			fadeInCounter--;
+DEBUG("Input fade in %d / %d: %f + %f = %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage);
+		}
+		if (fadeOutCounter > 0) {
+			returnVoltage = crossFade(returnVoltage, (float)fadeOutCounter / FADE_SAMPLES, 0.f);
+			fadeOutCounter--;
+DEBUG("Input fade out %d / %d counter %d: %f + %f = %f", readIndex, loopSize, fadeOutCounter, voltageIn, 0.f, returnVoltage);
+		}
+
+		float bufferVoltage = loopBuffer[readIndex];
+		returnVoltage = returnVoltage + feedback * bufferVoltage;
 
 		if (needWriteFadeIn) {
 			if (samplesRead(loopSize) >= FADE_SAMPLES) {
@@ -274,11 +294,8 @@ DEBUG("Write fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loo
 				needWriteFadeOut = false;
 			}
 			returnVoltage = crossFade(returnVoltage, getFadeCoefficient(loopSize, 1), 0.f);
-			DEBUG("Write fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
+DEBUG("Write fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, voltageIn, 0.f, returnVoltage, getFadeCoefficient(loopSize, -1));
 		}
-
-		float bufferVoltage = loopBuffer[readIndex];
-		returnVoltage = returnVoltage + feedback * bufferVoltage;
 
 		return returnVoltage;
 	}
