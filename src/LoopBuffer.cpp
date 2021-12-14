@@ -84,8 +84,8 @@ void GlitchBuffer::doWrite(int sampleRate, int loopSize, float voltage) {
 	if (writeIndex >= loopSize - 1) {
 		highWaterMarkIndex = writeIndex;
 	}
-if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
-if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
+//if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
+//if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
 }
 
 
@@ -95,9 +95,6 @@ void GlitchBuffer::next(int loopSize) {
 	if (readIndex >= loopSize) {
 		restartLoop();
 		readIndex = readIndex % loopSize;
-	}
-	else if (readIndex == loopSize - 1) {
-		//DEBUG("Ending loop. Latch %d count %d.", isLatched(), latchLoopCounter);
 	}
 }
 
