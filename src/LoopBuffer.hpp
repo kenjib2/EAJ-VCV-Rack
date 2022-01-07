@@ -1,4 +1,7 @@
 #pragma once
+#define DEBUG_POPS
+#define DEBUG_READ
+#define DEBUG_WRITE
 
 
 const int FADE_SAMPLES = 60;
@@ -122,29 +125,31 @@ protected:
 
 		if (needRewriteFadeIn && samplesRead(loopSize) <= FADE_SAMPLES) {
 			// Rewrite the beginning of the buffer to fade in. This will not take effect on the current read data until the next time
-			// reading through the loop. It does not alter the current iteration. This is a destructive operation.
+			// reading through the loop. It does not alter the current iteration. This is a destructive operation. It also only works
+			// if another write follows this one. Typically it is only useful during a latch.
 			if (samplesRead(loopSize) == FADE_SAMPLES) {
 				needRewriteFadeIn = false;
 			}
 			// Fade in the buffer head if this is the last latch
-			float writeVoltage = loopBuffer[readIndex];
+			float writeVoltage = doRead(sampleRate, loopSize, false);
 			writeVoltage = crossFade(writeVoltage, getFadeCoefficient(loopSize, -1), 0.f);
 			#ifdef DEBUG_POPS
-				DEBUG("Rewrite fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, loopBuffer[readIndex], 0.f, writeVoltage, getFadeCoefficient(loopSize, -1));
+				DEBUG("Rewrite fade in %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, doRead(sampleRate, loopSize, false), 0.f, writeVoltage, getFadeCoefficient(loopSize, -1));
 			#endif
 			doWrite(sampleRate, loopSize, writeVoltage);
 		}
 
 		if (needRewriteFadeOut && samplesRemaining(loopSize) <= FADE_SAMPLES) {
 			// Rewrite the end of the buffer to fade out. This will not take effect on the current read data until the next time
-			// reading through the loop. It does not alter the current iteration. This is a destructive operation.
+			// reading through the loop. It does not alter the current iteration. This is a destructive operation. It also only works
+			// if another write follows this one. Typically it is only useful during a latch.
 			if (samplesRemaining(loopSize) == 0) {
 				needRewriteFadeOut = false;
 			}
-			float writeVoltage = loopBuffer[readIndex];
+			float writeVoltage = doRead(sampleRate, loopSize, false);
 			writeVoltage = crossFade(writeVoltage, getFadeCoefficient(loopSize, 1), 0.f);
 			#ifdef DEBUG_POPS
-				DEBUG("Rewrite fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, loopBuffer[readIndex], 0.f, writeVoltage, getFadeCoefficient(loopSize, 1));
+				DEBUG("Rewrite fade out %d / %d: %f + %f = %f using coefficient %f", readIndex, loopSize, doRead(sampleRate, loopSize, false), 0.f, writeVoltage, getFadeCoefficient(loopSize, 1));
 			#endif
 			doWrite(sampleRate, loopSize, writeVoltage);
 		}
@@ -262,6 +267,13 @@ public:
 		bufferVoltage = removePops(bufferVoltage, sampleRate, loopSize);
 		returnVoltage = returnVoltage * dryVolume + bufferVoltage * wetVolume;
 
+		#ifdef DEBUG_READ
+			static float prevReturnVoltage = 0.f;
+			if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f", readIndex, loopSize, returnVoltage); }
+			if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f", readIndex, loopSize, returnVoltage); }
+			if (std::abs(prevReturnVoltage - returnVoltage > 0.3f)) { DEBUG("ERROR at index %d loopSize %d read voltage %f prev voltage %f", readIndex, loopSize, returnVoltage, prevReturnVoltage); }
+			prevReturnVoltage = returnVoltage;
+		#endif
 		return returnVoltage;
 	}
 	
@@ -296,7 +308,7 @@ public:
 			#endif
 		}
 
-		float bufferVoltage = loopBuffer[readIndex];
+		float bufferVoltage = doRead(sampleRate, loopSize, direction);
 		returnVoltage = returnVoltage + feedback * bufferVoltage;
 
 		if (needWriteFadeIn) {
@@ -318,6 +330,10 @@ public:
 			#endif
 		}
 
+#ifdef DEBUG_WRITE
+		if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("writeIndex %d loopSize %d write voltage: %f", writeIndex, loopSize, returnVoltage); }
+		if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("writeIndex %d loopSize %d write voltage: %f", writeIndex, loopSize, returnVoltage); }
+#endif
 		return returnVoltage;
 	}
 
@@ -327,7 +343,7 @@ public:
 
 class GlitchBuffer : public AudioBuffer {
 protected:
-	int highWaterMarkIndex; // This is the highest buffer position that was written to in the last pass through the loop.
+	int previousLoopSize;
 
 	float readPeekVoltage(int loopSize) override;
 	int getReverseIndex(int loopSize) override;

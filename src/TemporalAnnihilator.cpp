@@ -257,6 +257,7 @@ struct TemporalAnnihilator : Module {
 			float paramTimeLatchLog = paramTimeLatch * paramTimeLatch; // We want a logorithmic response rate
 
 			static bool sensitivityShuttingDown = false;
+			static int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE);
 
 			// Selecting the buffer
 			if (paramBuffer < 0.000001f) {
@@ -265,20 +266,26 @@ struct TemporalAnnihilator : Module {
 			else {
 				loopBuffer = glitchBuffer;
 			}
-			int loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
 
-			// --------------------------- Actions Starting Each Loop ---------------------------
+			// --------------------------- Actions Starting Each Loop or Cycle ---------------------------
+			if (loopBuffer->atLoopStart()) {
+			}
+
+			// loopSize will not account for drift the first time through the loop due to a circular dependency.
+			// However, this is okay because we will never be fading out in the first sample of a loop due to minimum time param.
 			if (loopBuffer->samplesRemaining(loopSize) == FADE_SAMPLES && peakReleaseCount > PEAK_RELEASE_SAMPLES && sensitivityTriggered) {
 				// Check if sensitivity isn't triggered for the next loop FADE_SAMPLES before we start the loop
 				// so we can fade out the 
 				loopBuffer->startInputFadeOut();
 				sensitivityShuttingDown = true;
 			}
-			else if (loopBuffer->atLoopStart()) {
+
+			if (loopBuffer->atLoopStart()) {
 				// Reset sensitivity triggering
 				if (sensitivityShuttingDown) {
 					sensitivityShuttingDown = false;
 					sensitivityTriggered = false;
+DEBUG("--------------------------------------- SENSITIVITY OFF ---------------------------------------");
 				}
 
 				// Managing latches this cycle -- don't latch if we aren't triggered
@@ -311,12 +318,15 @@ struct TemporalAnnihilator : Module {
 						timeOffset = int((paramTimeInSamples * 4) * offsetWeighting);
 					}
 				}
+
+				loopSize = clamp(paramTimeInSamples + timeOffset, int(MIN_TIME_PARAM * args.sampleRate), MAX_BUFFER_SIZE); // We have to calculate loopsize here to include drift
 			}
 
 			// --------------------------- Check for loop sensitivity trigger ---------------------------
 			float inputVoltage = inputs[INPUT_INPUT].getVoltage();
 			if (abs(inputVoltage) > 5.f - paramSensitivity) {
 				if (sensitivityTriggered == false) {
+DEBUG("--------------------------------------- SENSITIVITY ON ---------------------------------------");
 					loopBuffer->startInputFadeIn();
 				}
 				peakReleaseCount = 0;

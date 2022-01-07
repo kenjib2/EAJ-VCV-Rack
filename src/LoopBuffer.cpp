@@ -1,6 +1,6 @@
 #include "plugin.hpp"
 #include "LoopBuffer.hpp"
-#define DEBUG_READ
+#define DEBUG_GLITCH_POP_REMOVAL
 
 
 // THINGS THAT POP:
@@ -15,7 +15,7 @@
 
 GlitchBuffer::GlitchBuffer(int bufferSize)
 	: AudioBuffer(bufferSize)
-	, highWaterMarkIndex(0)
+	, previousLoopSize(0)
 {
 }
 
@@ -36,7 +36,7 @@ int GlitchBuffer::samplesRead(int loopSize) {
 
 
 int GlitchBuffer::samplesRemaining(int loopSize) {
-	return std::min(highWaterMarkIndex, loopSize - 1) - readIndex;
+	return std::min(previousLoopSize - 1, loopSize - 1) - readIndex;
 }
 
 
@@ -49,7 +49,7 @@ float GlitchBuffer::readPeekVoltage(int loopSize) {
 	int peekIndex = readIndex;
 	peekIndex -= FADE_SAMPLES;
 	if (peekIndex < 0) {
-		peekIndex += std::min(loopSize, highWaterMarkIndex + 1);
+		peekIndex += std::min(loopSize, previousLoopSize);
 	}
 
 	return loopBuffer[peekIndex];
@@ -59,43 +59,60 @@ float GlitchBuffer::readPeekVoltage(int loopSize) {
 float GlitchBuffer::doRead(int sampleRate, int loopSize, bool reverse) {
 	float returnVoltage = 0.f;
 	int reverseReadIndex = getReverseIndex(loopSize);
-	bool needFadeIn = false;
+	static bool needLocalPeekReturn = false;
+	#ifdef DEBUG_READ_CPP
+		static float prevReturnVoltage = 0.f;
+	#endif
 
-	DEBUG("TEST: %d", highWaterMarkIndex - readIndex);
 	if (reverse) {
 		returnVoltage = loopBuffer[reverseReadIndex];
 	}
 	else {
 		returnVoltage = loopBuffer[readIndex];
 
-		if (loopSize > highWaterMarkIndex + 1 && highWaterMarkIndex - readIndex >= 0 && highWaterMarkIndex - readIndex < FADE_SAMPLES) {
-			returnVoltage = crossFade(returnVoltage, (float)(highWaterMarkIndex - readIndex) / FADE_SAMPLES, 0.f);
-			needFadeIn = true;
-			#ifdef DEBUG_READ
-				DEBUG("ptr %d / %d Fading out: %f", readIndex, loopSize, returnVoltage);
+		if (loopSize > previousLoopSize && previousLoopSize - 1 - readIndex >= 0 && previousLoopSize - 1 - readIndex < FADE_SAMPLES) {
+			// Current loop is bigger. There will be empty space at the end. Fade out to 0.f voltage.
+			returnVoltage = crossFade(returnVoltage, (float)(previousLoopSize - 1 - readIndex) / FADE_SAMPLES, 0.f);
+			#ifdef DEBUG_GLITCH_POP_REMOVAL
+				DEBUG("ptr %d / %d (%d) Fading out glitch buffer mid loop: %f", readIndex, loopSize, previousLoopSize, returnVoltage);
 			#endif
+			needLocalPeekReturn = true;
+		} else if (loopSize < previousLoopSize && samplesRemaining(loopSize) < FADE_SAMPLES) {
+			// Current loop is shorter. Fade out to 0.f voltage.
+			returnVoltage = crossFade(returnVoltage, (float)samplesRemaining(loopSize) / FADE_SAMPLES, 0.f);
+			#ifdef DEBUG_GLITCH_POP_REMOVAL
+				DEBUG("ptr %d / %d (%d) Fading out glitch buffer end: %f", readIndex, loopSize, previousLoopSize, returnVoltage);
+			#endif
+			needLocalPeekReturn = true;
 		}
-		else if (needFadeIn && readIndex <= FADE_SAMPLES) {
-			if (readIndex == FADE_SAMPLES) {
-				needFadeIn = false;
-			}
 
+		// THERE IS ONE RARE GLITCH LEFT -- CHECK FOR ABS(PREVIOUS VOLTAGE - CURRENT) > X AT LOOP RESTART TO FIND IT.
+		// SOMETHING IS CRASHING SOMETIMES TOO -- HOPEFULLY RELATED
+		if ((readIndex <= FADE_SAMPLES && needLocalPeekReturn)
+			|| (readIndex <= FADE_SAMPLES && previousLoopSize != loopSize)
+			) {
+			if (readIndex == FADE_SAMPLES) {
+				needLocalPeekReturn = false;
+			}
 			returnVoltage = crossFade(returnVoltage, (float)readIndex / FADE_SAMPLES, 0.f);
-			#ifdef DEBUG_READ
-				DEBUG("ptr %d / %d Fading in: %f", readIndex, loopSize, returnVoltage);
+			#ifdef DEBUG_GLITCH_POP_REMOVAL
+				DEBUG("ptr %d / %d (%d) Fading in glitch buffer: %f", readIndex, loopSize, previousLoopSize, returnVoltage);
 			#endif
 		}
 	}
 
 	// Past the end of where we recorded last time just return silence
-	if (readIndex > highWaterMarkIndex) {
+	if (readIndex > previousLoopSize - 1) {
 		returnVoltage = 0.f;
 	}
 
-	#ifdef DEBUG_READ
-		//if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f samples read %d fade coefficient %f", readIndex, loopSize, returnVoltage, samplesRead(loopSize), getFadeCoefficient(loopSize, -1)); }
-		//if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f samples read %d fade coefficient %f", readIndex, loopSize, returnVoltage, samplesRead(loopSize), getFadeCoefficient(loopSize, 1)); }
+	#ifdef DEBUG_READ_CPP
+		if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f", readIndex, loopSize, returnVoltage); }
+		if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("Index %d / %d read voltage: %f", readIndex, loopSize, returnVoltage); }
+		if (std::abs(prevReturnVoltage - returnVoltage > 0.3f)) { DEBUG("ERROR %d loopSize %d prevLoopSize %d read voltage %f prev voltage %f", readIndex, loopSize, previousLoopSize, returnVoltage, prevReturnVoltage ); }
+		prevReturnVoltage = returnVoltage;
 	#endif
+
 	return returnVoltage;
 }
 
@@ -103,16 +120,38 @@ float GlitchBuffer::doRead(int sampleRate, int loopSize, bool reverse) {
 void GlitchBuffer::doWrite(int sampleRate, int loopSize, float voltage) {
 	writeIndex = readIndex;
 
-	loopBuffer[writeIndex] = voltage;
+	float writeVoltage = voltage;
 
-	// Updates when the loop size grows, truncates when it shrinks
-	if (writeIndex >= loopSize - 1) {
-		highWaterMarkIndex = writeIndex;
+	if (loopSize > previousLoopSize && previousLoopSize - 1 - writeIndex >= 0 && previousLoopSize - 1 - writeIndex < FADE_SAMPLES) {
+		// Current loop is bigger. Fade out previous loop to 0.f voltage on write.
+		writeVoltage = crossFade(writeVoltage, (float)(previousLoopSize - 1 - writeIndex) / FADE_SAMPLES, 0.f);
+#ifdef DEBUG_GLITCH_POP_REMOVAL
+		DEBUG("ptr %d / %d (%d) Fading out glitch write buffer mid loop: %f", writeIndex, loopSize, previousLoopSize, writeVoltage);
+#endif
 	}
-	#ifdef DEBUG_WRITE
-		if (samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
-		if (loopSize - samplesRead(loopSize) < FADE_SAMPLES + 10) { DEBUG("samples read %d writeIndex %d loopSize %d write voltage: %f", samplesRead(loopSize), writeIndex, loopSize, voltage); }
-	#endif
+
+	// Fade out the write if we are going to clear the buffer
+	if (writeIndex > loopSize - 1 - FADE_SAMPLES && previousLoopSize > loopSize) {
+		writeVoltage = crossFade(writeVoltage, (float)(loopSize - 1 - writeIndex) / FADE_SAMPLES, 0.f);
+#ifdef DEBUG_GLITCH_POP_REMOVAL
+		DEBUG("ptr %d / %d (%d) Fading out glitch write buffer: %f", readIndex, loopSize, previousLoopSize, writeVoltage);
+#endif
+	}
+
+	loopBuffer[writeIndex] = writeVoltage;
+
+	// Clear out the buffer after the end of the current loop
+	if (writeIndex == loopSize - 1 && previousLoopSize > loopSize) {
+		int startIndex = writeIndex + 1;
+		int endIndex = bufferSize - 1;
+		std::fill(loopBuffer + startIndex, loopBuffer + endIndex, 0.0f);
+#ifdef DEBUG_GLITCH_POP_REMOVAL
+		DEBUG("ptr %d / %d (%d) Clearing past loop end.", readIndex, loopSize, previousLoopSize);
+		for (int i = 0; i < 20; i++) {
+			DEBUG("ptr %d voltage %f", startIndex + i - 10, loopBuffer[startIndex + i - 10]);
+		}
+#endif
+	}
 }
 
 
@@ -120,6 +159,7 @@ void GlitchBuffer::next(int loopSize) {
 	readIndex++;
 	loopSize = std::min(loopSize, bufferSize); // Avoid buffer overruns
 	if (readIndex >= loopSize) {
+		previousLoopSize = loopSize;
 		restartLoop();
 		readIndex = readIndex % loopSize;
 	}
